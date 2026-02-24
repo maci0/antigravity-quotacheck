@@ -1,0 +1,14 @@
+[project]
+name = "antigravity-quotacheck"
+version = "0.1.0"
+description = "Check Antigravity AI model quota from the terminal"
+requires-python = ">=3.12"
+dependencies = [
+    "requests>=2.32.5",
+    "rich>=14.3.3",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
