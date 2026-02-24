@@ -6,6 +6,9 @@ Terminal TUI for checking your [Google Antigravity](https://idx.google.com/) AI 
 
 ## Features
 
+- **Local IDE connection** — fetch quota directly from a running Antigravity IDE over localhost (no credentials file needed)
+- **Cloud API** — fetch quota via Google Cloud Code API using OAuth refresh tokens
+- **Auto-detect** — tries local IDE first, falls back to cloud (default)
 - Live quota percentages for all models (Gemini, Claude, GPT-OSS)
 - Color-coded progress bars — green (>50%), yellow (>20%), red (<20%)
 - Reset countdown timers
@@ -15,13 +18,17 @@ Terminal TUI for checking your [Google Antigravity](https://idx.google.com/) AI 
 
 ## Prerequisites
 
-You need an `antigravity-accounts.json` file with a valid Google OAuth refresh token. This is created automatically by the [opencode-antigravity-auth](https://github.com/NoeFabris/opencode-antigravity-auth) plugin if you use OpenCode, or you can set one up manually.
+**Option A: Local IDE (easiest)** — Just have Antigravity running in your IDE (VS Code, JetBrains, etc.). The tool connects directly to the language server over localhost. No credentials file needed.
+
+**Option B: Cloud API** — You need an `antigravity-accounts.json` file with a valid Google OAuth refresh token. This is created automatically by the [opencode-antigravity-auth](https://github.com/NoeFabris/opencode-antigravity-auth) plugin if you use OpenCode, or you can set one up manually.
 
 The tool looks for credentials in order:
 
 1. `~/.config/opencode/antigravity-accounts.json`
 2. `$XDG_DATA_HOME/opencode/antigravity-accounts.json` (if set and differs from default)
 3. `~/.local/share/opencode/antigravity-accounts.json`
+
+By default, the tool tries local IDE first and falls back to the cloud API.
 
 ## Install & Run
 
@@ -35,7 +42,7 @@ uv run python quotacheck.py
 ## Usage
 
 ```
-usage: quotacheck.py [-h] [--watch] [--interval SECS] [--account INDEX] [--json]
+usage: quotacheck.py [-h] [--watch] [--interval SECS] [--account INDEX] [--json] [--local | --cloud]
 
 options:
   -h, --help                show this help message and exit
@@ -43,13 +50,21 @@ options:
   --interval, -i SECS       Refresh interval in seconds (default: 60)
   --account, -a INDEX       Account index (default: 0)
   --json, -j                Output raw JSON instead of TUI
+  --local                   Fetch quota from local IDE (no credentials file needed)
+  --cloud                   Fetch quota from cloud API (requires accounts file)
 ```
 
 ### Examples
 
 ```bash
-# One-shot check
+# Auto-detect: tries local IDE first, falls back to cloud
 uv run python quotacheck.py
+
+# Force local IDE connection
+uv run python quotacheck.py --local
+
+# Force cloud API
+uv run python quotacheck.py --cloud
 
 # Watch mode, refresh every 30 seconds
 uv run python quotacheck.py -w -i 30
@@ -57,8 +72,8 @@ uv run python quotacheck.py -w -i 30
 # Dump raw API response as JSON
 uv run python quotacheck.py --json
 
-# Use a different account (if you have multiple)
-uv run python quotacheck.py -a 1
+# Use a different account (if you have multiple, cloud mode)
+uv run python quotacheck.py --cloud -a 1
 ```
 
 ## Running Tests
@@ -68,6 +83,15 @@ uv run pytest
 ```
 
 ## How It Works
+
+### Local IDE mode
+
+1. Scans running processes for an Antigravity language server
+2. Discovers the server's listening port via `ss`/`netstat` (Linux) or `lsof` (macOS)
+3. Connects over localhost using [Connect RPC](https://connectrpc.com/) to call `GetUserStatus`
+4. Parses `clientModelConfigs` for quota info and renders the TUI
+
+### Cloud API mode
 
 1. Reads the OAuth refresh token from your `antigravity-accounts.json`
 2. Exchanges it for a short-lived access token via Google's OAuth2 token endpoint (cached for ~55 minutes)
