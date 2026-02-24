@@ -3,12 +3,19 @@
 
 import json
 import os
+import platform
+import re
+import subprocess
 import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
+import urllib3
+
+# Suppress warnings for local self-signed HTTPS connections to IDE
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -85,6 +92,128 @@ def invalidate_token_cache():
     global _cached_token, _cached_token_expiry
     _cached_token = None
     _cached_token_expiry = 0
+
+
+SERVER_SIGNALS = ("language-server", "lsp", "--csrf_token", "--extension_server_port", "exa.language_server_pb")
+
+
+def find_antigravity_process() -> dict | None:
+    """Find a running Antigravity language server process."""
+    try:
+        result = subprocess.run(["ps", "aux"], capture_output=True, text=True, timeout=5)
+    except (subprocess.SubprocessError, FileNotFoundError):
+        return None
+    for line in result.stdout.splitlines():
+        if "antigravity" not in line.lower():
+            continue
+        if not any(sig in line for sig in SERVER_SIGNALS):
+            continue
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        try:
+            pid = int(parts[1])
+        except ValueError:
+            continue
+        csrf_token = None
+        extension_server_port = None
+        m = re.search(r"--csrf_token[= ](\S+)", line)
+        if m:
+            csrf_token = m.group(1)
+        m = re.search(r"--extension_server_port[= ](\d+)", line)
+        if m:
+            extension_server_port = int(m.group(1))
+        return {"pid": pid, "csrf_token": csrf_token, "extension_server_port": extension_server_port}
+    return None
+
+
+def discover_ports(pid: int) -> list[int]:
+    """Discover TCP ports a process is listening on."""
+    ports: list[int] = []
+    system = platform.system()
+    if system == "Linux":
+        for cmd in [["ss", "-tlnp"], ["netstat", "-tlnp"]]:
+            try:
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            except (subprocess.SubprocessError, FileNotFoundError):
+                continue
+            for line in result.stdout.splitlines():
+                if f"pid={pid}," not in line:
+                    continue
+                m = re.search(r":(\d+)\s", line)
+                if m:
+                    port = int(m.group(1))
+                    if port not in ports:
+                        ports.append(port)
+            if ports:
+                break
+    elif system == "Darwin":
+        try:
+            result = subprocess.run(
+                ["lsof", "-nP", "-iTCP", "-sTCP:LISTEN", "-a", "-p", str(pid)],
+                capture_output=True, text=True, timeout=5,
+            )
+            for line in result.stdout.splitlines():
+                m = re.search(r":(\d+)\s", line)
+                if m:
+                    port = int(m.group(1))
+                    if port not in ports:
+                        ports.append(port)
+        except (subprocess.SubprocessError, FileNotFoundError):
+            pass
+    return ports
+
+
+def probe_connect_port(ports: list[int], csrf_token: str | None) -> str | None:
+    """Find the Connect RPC port by probing each candidate."""
+    headers = {"Connect-Protocol-Version": "1", "Content-Type": "application/json"}
+    if csrf_token:
+        headers["X-Codeium-Csrf-Token"] = csrf_token
+    path = "/exa.language_server_pb.LanguageServerService/GetUnleashData"
+    for port in ports:
+        for scheme in ("https", "http"):
+            url = f"{scheme}://127.0.0.1:{port}"
+            try:
+                resp = session.post(
+                    url + path, headers=headers, json={}, timeout=0.5,
+                    verify=False,
+                )
+                if resp.status_code in (200, 401):
+                    return url
+            except requests.RequestException:
+                continue
+    return None
+
+
+def fetch_models_local(base_url: str, csrf_token: str | None) -> tuple[str, dict]:
+    """Fetch model quota from local IDE and return (email, models_dict)."""
+    headers = {"Connect-Protocol-Version": "1", "Content-Type": "application/json"}
+    if csrf_token:
+        headers["X-Codeium-Csrf-Token"] = csrf_token
+    body = {"metadata": {"ideName": "antigravity", "extensionName": "antigravity", "locale": "en"}}
+    resp = session.post(
+        f"{base_url}/exa.language_server_pb.LanguageServerService/GetUserStatus",
+        headers=headers, json=body, timeout=15, verify=False,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+
+    email = data.get("email") or data.get("name") or "local-user"
+    models: dict[str, dict] = {}
+    for cfg in data.get("clientModelConfigs", []):
+        model_key = cfg.get("modelOrAlias", {}).get("model")
+        if not model_key:
+            continue
+        info: dict = {"displayName": cfg.get("label", model_key)}
+        quota = cfg.get("quotaInfo")
+        if quota:
+            info["quotaInfo"] = {
+                "remainingFraction": quota.get("remainingFraction", 0.0),
+            }
+            if quota.get("resetTime"):
+                info["quotaInfo"]["resetTime"] = quota["resetTime"]
+        models[model_key] = info
+    return email, {"models": models}
 
 
 def fetch_models(access_token: str) -> dict:
@@ -240,6 +369,25 @@ def build_dashboard(email: str, models: dict) -> Panel:
     )
 
 
+def _try_local_ide() -> tuple[str, dict] | None:
+    """Attempt to connect to a local Antigravity IDE. Returns (email, data) or None."""
+    proc = find_antigravity_process()
+    if not proc:
+        return None
+    csrf_token = proc.get("csrf_token")
+    ports: list[int] = []
+    if proc.get("extension_server_port"):
+        ports.append(proc["extension_server_port"])
+    ports.extend(p for p in discover_ports(proc["pid"]) if p not in ports)
+    if not ports:
+        return None
+    base_url = probe_connect_port(ports, csrf_token)
+    if not base_url:
+        return None
+    email, data = fetch_models_local(base_url, csrf_token)
+    return email, data
+
+
 def main():
     import argparse
 
@@ -262,44 +410,84 @@ def main():
     parser.add_argument(
         "--json", "-j", action="store_true", help="Output raw JSON instead of TUI"
     )
+    source = parser.add_mutually_exclusive_group()
+    source.add_argument(
+        "--local", action="store_true",
+        help="Fetch quota from local IDE (no credentials file needed)",
+    )
+    source.add_argument(
+        "--cloud", action="store_true",
+        help="Fetch quota from cloud API (requires accounts file)",
+    )
     args = parser.parse_args()
 
-    accounts_path = find_accounts_file()
-    if not accounts_path:
-        console.print("[red]Could not find antigravity-accounts.json[/]")
-        console.print("Looked in:")
-        for p in _search_paths():
-            console.print(f"  {p}")
-        console.print(
-            "\nMake sure you have opencode-antigravity-auth set up, "
-            "or Antigravity credentials stored in one of the above paths."
-        )
-        sys.exit(1)
+    email = None
+    do_fetch = None
 
-    accounts = load_accounts(accounts_path)
-    if not accounts:
-        console.print("[red]No accounts found in credentials file.[/]")
-        sys.exit(1)
+    # --- Try local IDE ---
+    if args.local or not args.cloud:
+        try:
+            result = _try_local_ide()
+        except Exception as e:
+            result = None
+            if args.local:
+                console.print(f"[red]Local IDE connection failed: {e}[/]")
+                sys.exit(1)
+        if result:
+            email, local_data = result
+            def do_fetch(_data=local_data) -> dict:
+                return _data
+            console.print(f"[dim]Connected to local IDE[/]")
+        elif args.local:
+            console.print("[red]Could not find a running Antigravity IDE.[/]")
+            console.print(
+                "Make sure Antigravity is running in your IDE "
+                "(VS Code, JetBrains, etc.) and try again."
+            )
+            sys.exit(1)
 
-    if args.account >= len(accounts):
-        console.print(
-            f"[red]Account index {args.account} out of range "
-            f"(have {len(accounts)} account(s)).[/]"
-        )
-        sys.exit(1)
+    # --- Fall back to cloud ---
+    if do_fetch is None:
+        accounts_path = find_accounts_file()
+        if not accounts_path:
+            console.print("[red]Could not find antigravity-accounts.json[/]")
+            console.print("Looked in:")
+            for p in _search_paths():
+                console.print(f"  {p}")
+            console.print(
+                "\nMake sure you have opencode-antigravity-auth set up, "
+                "or Antigravity credentials stored in one of the above paths."
+            )
+            console.print(
+                "\n[dim]Tip: If Antigravity is running in your IDE, "
+                "try [bold]--local[/bold] to fetch quota directly.[/]"
+            )
+            sys.exit(1)
 
-    account = accounts[args.account]
-    email = account.get("email", "unknown")
-    refresh_token = account.get("refreshToken")
-    if not refresh_token:
-        console.print(
-            f"[red]Account {args.account} ({email}) has no refreshToken.[/]"
-        )
-        sys.exit(1)
+        accounts = load_accounts(accounts_path)
+        if not accounts:
+            console.print("[red]No accounts found in credentials file.[/]")
+            sys.exit(1)
 
-    def do_fetch() -> dict:
-        access_token = get_access_token(refresh_token)
-        return fetch_models(access_token)
+        if args.account >= len(accounts):
+            console.print(
+                f"[red]Account index {args.account} out of range "
+                f"(have {len(accounts)} account(s)).[/]"
+            )
+            sys.exit(1)
+
+        account = accounts[args.account]
+        email = account.get("email", "unknown")
+        refresh_token = account.get("refreshToken")
+        if not refresh_token:
+            console.print(
+                f"[red]Account {args.account} ({email}) has no refreshToken.[/]"
+            )
+            sys.exit(1)
+
+        def do_fetch() -> dict:
+            access_token = get_access_token(refresh_token)
+            return fetch_models(access_token)
 
     if args.json:
         with console.status("[cyan]Fetching quota...[/]"):

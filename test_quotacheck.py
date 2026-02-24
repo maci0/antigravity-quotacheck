@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 import pytest
+import requests
 from rich.console import Console
 
 import quotacheck
@@ -439,3 +440,206 @@ class TestFetchModels:
         with pytest.raises(Exception, match="401"):
             quotacheck.fetch_models("stale")
         assert quotacheck._cached_token is None
+
+
+# --- find_antigravity_process ---
+
+
+class TestFindAntigravityProcess:
+    @patch("quotacheck.subprocess.run")
+    def test_finds_process_with_csrf_and_port(self, mock_run):
+        mock_run.return_value = MagicMock(
+            stdout=(
+                "USER  PID %CPU\n"
+                "user  1234 0.0 /opt/antigravity/language-server "
+                "--csrf_token abc123 --extension_server_port 9876\n"
+            )
+        )
+        result = quotacheck.find_antigravity_process()
+        assert result is not None
+        assert result["pid"] == 1234
+        assert result["csrf_token"] == "abc123"
+        assert result["extension_server_port"] == 9876
+
+    @patch("quotacheck.subprocess.run")
+    def test_finds_process_without_flags(self, mock_run):
+        mock_run.return_value = MagicMock(
+            stdout="user  5678 0.0 /bin/antigravity --lsp\n"
+        )
+        result = quotacheck.find_antigravity_process()
+        assert result is not None
+        assert result["pid"] == 5678
+        assert result["csrf_token"] is None
+        assert result["extension_server_port"] is None
+
+    @patch("quotacheck.subprocess.run")
+    def test_no_matching_process(self, mock_run):
+        mock_run.return_value = MagicMock(stdout="user 111 0.0 /bin/bash\n")
+        assert quotacheck.find_antigravity_process() is None
+
+    @patch("quotacheck.subprocess.run")
+    def test_antigravity_without_server_signal(self, mock_run):
+        mock_run.return_value = MagicMock(
+            stdout="user 111 0.0 /bin/antigravity --help\n"
+        )
+        assert quotacheck.find_antigravity_process() is None
+
+    @patch("quotacheck.subprocess.run", side_effect=FileNotFoundError)
+    def test_ps_not_found(self, mock_run):
+        assert quotacheck.find_antigravity_process() is None
+
+
+# --- discover_ports ---
+
+
+class TestDiscoverPorts:
+    @patch("quotacheck.platform.system", return_value="Linux")
+    @patch("quotacheck.subprocess.run")
+    def test_linux_ss(self, mock_run, _mock_sys):
+        mock_run.return_value = MagicMock(
+            stdout=(
+                "LISTEN  0  128  *:3000  *:*  users:((\"node\",pid=42,fd=3))\n"
+                "LISTEN  0  128  *:8080  *:*  users:((\"antigravity\",pid=42,fd=4))\n"
+            )
+        )
+        ports = quotacheck.discover_ports(42)
+        assert 3000 in ports
+        assert 8080 in ports
+
+    @patch("quotacheck.platform.system", return_value="Linux")
+    @patch("quotacheck.subprocess.run")
+    def test_linux_ss_fallback_to_netstat(self, mock_run, _mock_sys):
+        # First call (ss) fails, second (netstat) succeeds
+        mock_run.side_effect = [
+            FileNotFoundError,
+            MagicMock(stdout="tcp  0  0  0.0.0.0:4000  0.0.0.0:*  LISTEN  pid=99,fd=3\n"),
+        ]
+        ports = quotacheck.discover_ports(99)
+        assert 4000 in ports
+
+    @patch("quotacheck.platform.system", return_value="Darwin")
+    @patch("quotacheck.subprocess.run")
+    def test_macos_lsof(self, mock_run, _mock_sys):
+        mock_run.return_value = MagicMock(
+            stdout="antigrav 55 user  5u  IPv4  TCP *:5000 (LISTEN)\n"
+        )
+        ports = quotacheck.discover_ports(55)
+        assert 5000 in ports
+
+    @patch("quotacheck.platform.system", return_value="Linux")
+    @patch("quotacheck.subprocess.run", side_effect=FileNotFoundError)
+    def test_no_ports_found(self, mock_run, _mock_sys):
+        assert quotacheck.discover_ports(1) == []
+
+
+# --- probe_connect_port ---
+
+
+class TestProbeConnectPort:
+    @patch.object(quotacheck.session, "post")
+    def test_finds_https_port(self, mock_post):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_post.return_value = mock_resp
+        result = quotacheck.probe_connect_port([3000], "tok")
+        assert result == "https://127.0.0.1:3000"
+
+    @patch.object(quotacheck.session, "post")
+    def test_falls_back_to_http(self, mock_post):
+        def side_effect(url, **kwargs):
+            if url.startswith("https"):
+                raise requests.ConnectionError("refused")
+            resp = MagicMock()
+            resp.status_code = 200
+            return resp
+        mock_post.side_effect = side_effect
+        result = quotacheck.probe_connect_port([3000], None)
+        assert result == "http://127.0.0.1:3000"
+
+    @patch.object(quotacheck.session, "post")
+    def test_401_still_valid(self, mock_post):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 401
+        mock_post.return_value = mock_resp
+        result = quotacheck.probe_connect_port([3000], None)
+        assert result is not None
+
+    @patch.object(quotacheck.session, "post", side_effect=requests.ConnectionError)
+    def test_no_ports_respond(self, mock_post):
+        assert quotacheck.probe_connect_port([3000, 3001], None) is None
+
+    @patch.object(quotacheck.session, "post")
+    def test_csrf_header_sent(self, mock_post):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_post.return_value = mock_resp
+        quotacheck.probe_connect_port([3000], "my-csrf")
+        call_kwargs = mock_post.call_args
+        assert call_kwargs.kwargs["headers"]["X-Codeium-Csrf-Token"] == "my-csrf"
+
+
+# --- fetch_models_local ---
+
+
+SAMPLE_LOCAL_RESPONSE = {
+    "email": "local@example.com",
+    "clientModelConfigs": [
+        {
+            "label": "Gemini 3 Pro",
+            "modelOrAlias": {"model": "gemini-3-pro"},
+            "quotaInfo": {"remainingFraction": 0.75, "resetTime": "2026-02-25T07:00:00Z"},
+        },
+        {
+            "label": "Claude Sonnet 4.6",
+            "modelOrAlias": {"model": "claude-sonnet-4-6"},
+            "quotaInfo": {"remainingFraction": 0.3},
+        },
+        {
+            "label": "No Model Key",
+            "modelOrAlias": {},
+        },
+    ],
+}
+
+
+class TestFetchModelsLocal:
+    @patch.object(quotacheck.session, "post")
+    def test_parses_response(self, mock_post):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = SAMPLE_LOCAL_RESPONSE
+        mock_resp.raise_for_status = MagicMock()
+        mock_post.return_value = mock_resp
+
+        email, data = quotacheck.fetch_models_local("https://127.0.0.1:3000", "tok")
+        assert email == "local@example.com"
+        models = data["models"]
+        assert "gemini-3-pro" in models
+        assert models["gemini-3-pro"]["displayName"] == "Gemini 3 Pro"
+        assert models["gemini-3-pro"]["quotaInfo"]["remainingFraction"] == 0.75
+        assert models["gemini-3-pro"]["quotaInfo"]["resetTime"] == "2026-02-25T07:00:00Z"
+        assert "claude-sonnet-4-6" in models
+        assert models["claude-sonnet-4-6"]["displayName"] == "Claude Sonnet 4.6"
+        # Model with no key should be skipped
+        assert len(models) == 2
+
+    @patch.object(quotacheck.session, "post")
+    def test_fallback_email(self, mock_post):
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"name": "Test User", "clientModelConfigs": []}
+        mock_resp.raise_for_status = MagicMock()
+        mock_post.return_value = mock_resp
+
+        email, data = quotacheck.fetch_models_local("http://127.0.0.1:3000", None)
+        assert email == "Test User"
+        assert data["models"] == {}
+
+    @patch.object(quotacheck.session, "post")
+    def test_default_email(self, mock_post):
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"clientModelConfigs": []}
+        mock_resp.raise_for_status = MagicMock()
+        mock_post.return_value = mock_resp
+
+        email, _ = quotacheck.fetch_models_local("http://127.0.0.1:3000", None)
+        assert email == "local-user"
