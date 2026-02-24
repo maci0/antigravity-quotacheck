@@ -2,6 +2,8 @@
 
 Terminal TUI for checking your [Google Antigravity](https://idx.google.com/) AI model quota — the same info you see in the Antigravity IDE quota dashboard, but from the command line.
 
+![screenshot](screenshot.png)
+
 ## Features
 
 - Live quota percentages for all models (Gemini, Claude, GPT-OSS)
@@ -57,19 +59,6 @@ uv run python quotacheck.py --json
 
 # Use a different account (if you have multiple)
 uv run python quotacheck.py -a 1
-```
-
-### Sample Output
-
-```
-╭──────────────────── Antigravity Quota — user@gmail.com ─────────────────────╮
-│                                                                             │
-│ Model                                Quota                Resets            │
-│ * Gemini 3.1 Pro (High) (New)        ███████████████ 100%  4h 59m           │
-│ * Claude Sonnet 4.6 (Thinking)       ███████░░░░░░░░  50%  2h 13m           │
-│ * GPT-OSS 120B (Medium)              ███░░░░░░░░░░░░  20%     44m           │
-│                                                                             │
-╰──────────────────────────────── 14:32:01 ────────────────────────────────────╯
 ```
 
 ## Running Tests
