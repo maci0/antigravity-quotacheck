@@ -21,7 +21,9 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-OAUTH_CLIENT_ID = "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com"
+OAUTH_CLIENT_ID = (
+    "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com"
+)
 OAUTH_CLIENT_SECRET = "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"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 API_BASE = "https://cloudcode-pa.googleapis.com"
@@ -94,13 +96,21 @@ def invalidate_token_cache():
     _cached_token_expiry = 0
 
 
-SERVER_SIGNALS = ("language-server", "lsp", "--csrf_token", "--extension_server_port", "exa.language_server_pb")
+SERVER_SIGNALS = (
+    "language-server",
+    "lsp",
+    "--csrf_token",
+    "--extension_server_port",
+    "exa.language_server_pb",
+)
 
 
 def find_antigravity_process() -> dict | None:
     """Find a running Antigravity language server process."""
     try:
-        result = subprocess.run(["ps", "aux"], capture_output=True, text=True, timeout=5)
+        result = subprocess.run(
+            ["ps", "aux"], capture_output=True, text=True, timeout=5
+        )
     except (subprocess.SubprocessError, FileNotFoundError):
         return None
     for line in result.stdout.splitlines():
@@ -123,7 +133,11 @@ def find_antigravity_process() -> dict | None:
         m = re.search(r"--extension_server_port[= ](\d+)", line)
         if m:
             extension_server_port = int(m.group(1))
-        return {"pid": pid, "csrf_token": csrf_token, "extension_server_port": extension_server_port}
+        return {
+            "pid": pid,
+            "csrf_token": csrf_token,
+            "extension_server_port": extension_server_port,
+        }
     return None
 
 
@@ -151,7 +165,9 @@ def discover_ports(pid: int) -> list[int]:
         try:
             result = subprocess.run(
                 ["lsof", "-nP", "-iTCP", "-sTCP:LISTEN", "-a", "-p", str(pid)],
-                capture_output=True, text=True, timeout=5,
+                capture_output=True,
+                text=True,
+                timeout=5,
             )
             for line in result.stdout.splitlines():
                 m = re.search(r":(\d+)\s", line)
@@ -175,7 +191,10 @@ def probe_connect_port(ports: list[int], csrf_token: str | None) -> str | None:
             url = f"{scheme}://127.0.0.1:{port}"
             try:
                 resp = session.post(
-                    url + path, headers=headers, json={}, timeout=0.5,
+                    url + path,
+                    headers=headers,
+                    json={},
+                    timeout=0.5,
                     verify=False,
                 )
                 if resp.status_code in (200, 401):
@@ -190,21 +209,39 @@ def fetch_models_local(base_url: str, csrf_token: str | None) -> tuple[str, dict
     headers = {"Connect-Protocol-Version": "1", "Content-Type": "application/json"}
     if csrf_token:
         headers["X-Codeium-Csrf-Token"] = csrf_token
-    body = {"metadata": {"ideName": "antigravity", "extensionName": "antigravity", "locale": "en"}}
+    body = {
+        "metadata": {
+            "ideName": "antigravity",
+            "extensionName": "antigravity",
+            "locale": "en",
+        }
+    }
     resp = session.post(
         f"{base_url}/exa.language_server_pb.LanguageServerService/GetUserStatus",
-        headers=headers, json=body, timeout=15, verify=False,
+        headers=headers,
+        json=body,
+        timeout=15,
+        verify=False,
     )
     resp.raise_for_status()
     data = resp.json()
 
-    email = data.get("email") or data.get("name") or "local-user"
+    user_status = data.get("userStatus", data)
+    email = user_status.get("email") or user_status.get("name") or "local-user"
+
+    cascade = user_status.get("cascadeModelConfigData", user_status)
+    config_list = cascade.get("clientModelConfigs", [])
+
     models: dict[str, dict] = {}
-    for cfg in data.get("clientModelConfigs", []):
+    for cfg in config_list:
         model_key = cfg.get("modelOrAlias", {}).get("model")
         if not model_key:
             continue
         info: dict = {"displayName": cfg.get("label", model_key)}
+        if cfg.get("isRecommended") or cfg.get("recommended"):
+            info["recommended"] = True
+        if cfg.get("tagTitle"):
+            info["tagTitle"] = cfg["tagTitle"]
         quota = cfg.get("quotaInfo")
         if quota:
             info["quotaInfo"] = {
@@ -275,20 +312,24 @@ def model_family(key: str, info: dict) -> str | None:
     """Return the display family, or None if the model should be hidden."""
     if key.startswith(HIDDEN_PREFIXES):
         return None
-    if not info.get("displayName"):
+    display = info.get("displayName")
+    if not display:
         return None
     provider = info.get("modelProvider", "")
     key_lower = key.lower()
-    if "GOOGLE" in provider or "gemini" in key_lower:
+    display_lower = display.lower()
+    if "GOOGLE" in provider or "gemini" in key_lower or "gemini" in display_lower:
         return "Gemini"
-    if "ANTHROPIC" in provider or "claude" in key_lower:
+    if "ANTHROPIC" in provider or "claude" in key_lower or "claude" in display_lower:
         return "Claude"
-    if "OPENAI" in provider or "gpt" in key_lower:
+    if "OPENAI" in provider or "gpt" in key_lower or "gpt" in display_lower:
         return "GPT"
     return "Other"
 
 
-def _model_name_text(display_name: str, tag_title: str | None, recommended: bool) -> Text:
+def _model_name_text(
+    display_name: str, tag_title: str | None, recommended: bool
+) -> Text:
     """Build the model name as a Text object, avoiding markup injection."""
     text = Text()
     if recommended:
@@ -404,7 +445,11 @@ def main():
         help="Refresh interval in seconds (default: 60)",
     )
     parser.add_argument(
-        "--account", "-a", type=int, default=0, metavar="INDEX",
+        "--account",
+        "-a",
+        type=int,
+        default=0,
+        metavar="INDEX",
         help="Account index (default: 0)",
     )
     parser.add_argument(
@@ -412,11 +457,13 @@ def main():
     )
     source = parser.add_mutually_exclusive_group()
     source.add_argument(
-        "--local", action="store_true",
+        "--local",
+        action="store_true",
         help="Fetch quota from local IDE (no credentials file needed)",
     )
     source.add_argument(
-        "--cloud", action="store_true",
+        "--cloud",
+        action="store_true",
         help="Fetch quota from cloud API (requires accounts file)",
     )
     args = parser.parse_args()
@@ -424,7 +471,6 @@ def main():
     email = None
     do_fetch = None
 
-    # --- Try local IDE ---
     if args.local or not args.cloud:
         try:
             result = _try_local_ide()
@@ -435,9 +481,24 @@ def main():
                 sys.exit(1)
         if result:
             email, local_data = result
-            def do_fetch(_data=local_data) -> dict:
-                return _data
-            console.print(f"[dim]Connected to local IDE[/]")
+            local_models = local_data.get("models", {})
+            if local_models:
+
+                def do_fetch(_data=local_data) -> dict:
+                    return _data
+
+                console.print("[dim]Connected to local IDE[/]")
+            elif args.local:
+                console.print(
+                    "[yellow]Connected to local IDE but no models returned.[/]"
+                )
+
+                def do_fetch(_data=local_data) -> dict:
+                    return _data
+            else:
+                console.print(
+                    "[dim]Local IDE returned no models, falling back to cloud...[/]"
+                )
         elif args.local:
             console.print("[red]Could not find a running Antigravity IDE.[/]")
             console.print(
@@ -445,8 +506,11 @@ def main():
                 "(VS Code, JetBrains, etc.) and try again."
             )
             sys.exit(1)
+        elif not args.cloud:
+            console.print(
+                "[dim]No local Antigravity IDE found, falling back to cloud...[/]"
+            )
 
-    # --- Fall back to cloud ---
     if do_fetch is None:
         accounts_path = find_accounts_file()
         if not accounts_path:

@@ -99,7 +99,9 @@ class TestFormatResetTime:
         assert quotacheck.format_reset_time(past) == "now"
 
     def test_future_hours_and_minutes(self):
-        future = (datetime.now(timezone.utc) + timedelta(hours=3, minutes=30)).isoformat()
+        future = (
+            datetime.now(timezone.utc) + timedelta(hours=3, minutes=30)
+        ).isoformat()
         result = quotacheck.format_reset_time(future)
         assert result.startswith("3h ")
         assert "m" in result
@@ -177,25 +179,47 @@ class TestBuildBar:
 
 class TestModelFamily:
     def test_gemini_by_provider(self):
-        assert quotacheck.model_family("x", {"displayName": "X", "modelProvider": "MODEL_PROVIDER_GOOGLE"}) == "Gemini"
+        assert (
+            quotacheck.model_family(
+                "x", {"displayName": "X", "modelProvider": "MODEL_PROVIDER_GOOGLE"}
+            )
+            == "Gemini"
+        )
 
     def test_gemini_by_key(self):
         assert quotacheck.model_family("gemini-3-pro", {"displayName": "G"}) == "Gemini"
 
     def test_claude_by_provider(self):
-        assert quotacheck.model_family("x", {"displayName": "X", "modelProvider": "MODEL_PROVIDER_ANTHROPIC"}) == "Claude"
+        assert (
+            quotacheck.model_family(
+                "x", {"displayName": "X", "modelProvider": "MODEL_PROVIDER_ANTHROPIC"}
+            )
+            == "Claude"
+        )
 
     def test_claude_by_key(self):
-        assert quotacheck.model_family("claude-sonnet", {"displayName": "C"}) == "Claude"
+        assert (
+            quotacheck.model_family("claude-sonnet", {"displayName": "C"}) == "Claude"
+        )
 
     def test_gpt_by_provider(self):
-        assert quotacheck.model_family("x", {"displayName": "X", "modelProvider": "MODEL_PROVIDER_OPENAI"}) == "GPT"
+        assert (
+            quotacheck.model_family(
+                "x", {"displayName": "X", "modelProvider": "MODEL_PROVIDER_OPENAI"}
+            )
+            == "GPT"
+        )
 
     def test_gpt_by_key(self):
         assert quotacheck.model_family("gpt-oss-120b", {"displayName": "G"}) == "GPT"
 
     def test_other(self):
-        assert quotacheck.model_family("mystery", {"displayName": "M", "modelProvider": "UNKNOWN"}) == "Other"
+        assert (
+            quotacheck.model_family(
+                "mystery", {"displayName": "M", "modelProvider": "UNKNOWN"}
+            )
+            == "Other"
+        )
 
     def test_hidden_tab_prefix(self):
         assert quotacheck.model_family("tab_flash", {"displayName": "T"}) is None
@@ -206,6 +230,39 @@ class TestModelFamily:
     def test_no_display_name(self):
         assert quotacheck.model_family("gemini-x", {}) is None
         assert quotacheck.model_family("gemini-x", {"displayName": None}) is None
+
+    def test_gemini_by_display_name(self):
+        assert (
+            quotacheck.model_family(
+                "MODEL_PLACEHOLDER_M37", {"displayName": "Gemini 3.1 Pro (High)"}
+            )
+            == "Gemini"
+        )
+
+    def test_claude_by_display_name(self):
+        assert (
+            quotacheck.model_family(
+                "MODEL_PLACEHOLDER_M35", {"displayName": "Claude Sonnet 4.6 (Thinking)"}
+            )
+            == "Claude"
+        )
+
+    def test_gpt_by_display_name(self):
+        assert (
+            quotacheck.model_family(
+                "MODEL_OPENAI_GPT_OSS_120B_MEDIUM",
+                {"displayName": "GPT-OSS 120B (Medium)"},
+            )
+            == "GPT"
+        )
+
+    def test_opaque_key_no_provider_falls_to_other(self):
+        assert (
+            quotacheck.model_family(
+                "MODEL_PLACEHOLDER_M99", {"displayName": "Unknown Future Model"}
+            )
+            == "Other"
+        )
 
 
 # --- _model_name_text ---
@@ -294,7 +351,9 @@ class TestBuildDashboard:
 
 class TestSearchPaths:
     def test_default_no_xdg(self):
-        with patch.dict(os.environ, {"HOME": os.environ.get("HOME", "/tmp")}, clear=True):
+        with patch.dict(
+            os.environ, {"HOME": os.environ.get("HOME", "/tmp")}, clear=True
+        ):
             paths = quotacheck._search_paths()
             assert len(paths) == 2
             assert ".config" in str(paths[0])
@@ -339,7 +398,9 @@ class TestFindAccountsFile:
         missing = tmp_path / "nope.json"
         existing = tmp_path / "yes.json"
         existing.write_text("{}")
-        with patch.object(quotacheck, "_search_paths", return_value=[missing, existing]):
+        with patch.object(
+            quotacheck, "_search_paths", return_value=[missing, existing]
+        ):
             assert quotacheck.find_accounts_file() == existing
 
 
@@ -498,8 +559,8 @@ class TestDiscoverPorts:
     def test_linux_ss(self, mock_run, _mock_sys):
         mock_run.return_value = MagicMock(
             stdout=(
-                "LISTEN  0  128  *:3000  *:*  users:((\"node\",pid=42,fd=3))\n"
-                "LISTEN  0  128  *:8080  *:*  users:((\"antigravity\",pid=42,fd=4))\n"
+                'LISTEN  0  128  *:3000  *:*  users:(("node",pid=42,fd=3))\n'
+                'LISTEN  0  128  *:8080  *:*  users:(("antigravity",pid=42,fd=4))\n'
             )
         )
         ports = quotacheck.discover_ports(42)
@@ -512,7 +573,9 @@ class TestDiscoverPorts:
         # First call (ss) fails, second (netstat) succeeds
         mock_run.side_effect = [
             FileNotFoundError,
-            MagicMock(stdout="tcp  0  0  0.0.0.0:4000  0.0.0.0:*  LISTEN  pid=99,fd=3\n"),
+            MagicMock(
+                stdout="tcp  0  0  0.0.0.0:4000  0.0.0.0:*  LISTEN  pid=99,fd=3\n"
+            ),
         ]
         ports = quotacheck.discover_ports(99)
         assert 4000 in ports
@@ -552,6 +615,7 @@ class TestProbeConnectPort:
             resp = MagicMock()
             resp.status_code = 200
             return resp
+
         mock_post.side_effect = side_effect
         result = quotacheck.probe_connect_port([3000], None)
         assert result == "http://127.0.0.1:3000"
@@ -587,7 +651,10 @@ SAMPLE_LOCAL_RESPONSE = {
         {
             "label": "Gemini 3 Pro",
             "modelOrAlias": {"model": "gemini-3-pro"},
-            "quotaInfo": {"remainingFraction": 0.75, "resetTime": "2026-02-25T07:00:00Z"},
+            "quotaInfo": {
+                "remainingFraction": 0.75,
+                "resetTime": "2026-02-25T07:00:00Z",
+            },
         },
         {
             "label": "Claude Sonnet 4.6",
@@ -599,6 +666,49 @@ SAMPLE_LOCAL_RESPONSE = {
             "modelOrAlias": {},
         },
     ],
+}
+
+SAMPLE_LOCAL_RESPONSE_NESTED = {
+    "userStatus": {
+        "name": "Marcel Wysocki",
+        "email": "maci@example.com",
+        "cascadeModelConfigData": {
+            "clientModelConfigs": [
+                {
+                    "label": "Claude Sonnet 4.6 (Thinking)",
+                    "modelOrAlias": {"model": "MODEL_PLACEHOLDER_M35"},
+                    "isRecommended": True,
+                    "quotaInfo": {
+                        "remainingFraction": 1.0,
+                        "resetTime": "2026-02-28T11:34:29Z",
+                    },
+                },
+                {
+                    "label": "Gemini 3.1 Pro (High)",
+                    "modelOrAlias": {"model": "MODEL_PLACEHOLDER_M37"},
+                    "isRecommended": True,
+                    "tagTitle": "New",
+                    "quotaInfo": {
+                        "remainingFraction": 0.5,
+                        "resetTime": "2026-02-28T11:34:34Z",
+                    },
+                },
+                {
+                    "label": "GPT-OSS 120B (Medium)",
+                    "modelOrAlias": {"model": "MODEL_OPENAI_GPT_OSS_120B_MEDIUM"},
+                    "isRecommended": True,
+                    "quotaInfo": {
+                        "remainingFraction": 0.0,
+                        "resetTime": "2026-02-28T11:34:29Z",
+                    },
+                },
+                {
+                    "label": "No Model Key",
+                    "modelOrAlias": {},
+                },
+            ],
+        },
+    },
 }
 
 
@@ -617,7 +727,9 @@ class TestFetchModelsLocal:
         assert "gemini-3-pro" in models
         assert models["gemini-3-pro"]["displayName"] == "Gemini 3 Pro"
         assert models["gemini-3-pro"]["quotaInfo"]["remainingFraction"] == 0.75
-        assert models["gemini-3-pro"]["quotaInfo"]["resetTime"] == "2026-02-25T07:00:00Z"
+        assert (
+            models["gemini-3-pro"]["quotaInfo"]["resetTime"] == "2026-02-25T07:00:00Z"
+        )
         assert "claude-sonnet-4-6" in models
         assert models["claude-sonnet-4-6"]["displayName"] == "Claude Sonnet 4.6"
         # Model with no key should be skipped
@@ -643,3 +755,43 @@ class TestFetchModelsLocal:
 
         email, _ = quotacheck.fetch_models_local("http://127.0.0.1:3000", None)
         assert email == "local-user"
+
+    @patch.object(quotacheck.session, "post")
+    def test_parses_nested_response(self, mock_post):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = SAMPLE_LOCAL_RESPONSE_NESTED
+        mock_resp.raise_for_status = MagicMock()
+        mock_post.return_value = mock_resp
+
+        email, data = quotacheck.fetch_models_local("http://127.0.0.1:3000", "tok")
+        assert email == "maci@example.com"
+        models = data["models"]
+        assert "MODEL_PLACEHOLDER_M35" in models
+        assert (
+            models["MODEL_PLACEHOLDER_M35"]["displayName"]
+            == "Claude Sonnet 4.6 (Thinking)"
+        )
+        assert models["MODEL_PLACEHOLDER_M35"]["quotaInfo"]["remainingFraction"] == 1.0
+        assert models["MODEL_PLACEHOLDER_M35"]["recommended"] is True
+        assert "MODEL_PLACEHOLDER_M37" in models
+        assert models["MODEL_PLACEHOLDER_M37"]["tagTitle"] == "New"
+        assert models["MODEL_PLACEHOLDER_M37"]["quotaInfo"]["remainingFraction"] == 0.5
+        assert "MODEL_OPENAI_GPT_OSS_120B_MEDIUM" in models
+        assert len(models) == 3
+
+    @patch.object(quotacheck.session, "post")
+    def test_nested_fallback_email(self, mock_post):
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {
+            "userStatus": {
+                "name": "Nested User",
+                "cascadeModelConfigData": {"clientModelConfigs": []},
+            },
+        }
+        mock_resp.raise_for_status = MagicMock()
+        mock_post.return_value = mock_resp
+
+        email, data = quotacheck.fetch_models_local("http://127.0.0.1:3000", None)
+        assert email == "Nested User"
+        assert data["models"] == {}
