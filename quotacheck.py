@@ -484,8 +484,11 @@ def main():
             local_models = local_data.get("models", {})
             if local_models:
 
-                def do_fetch(_data=local_data) -> dict:
-                    return _data
+                def do_fetch() -> dict:
+                    fresh = _try_local_ide()
+                    if fresh:
+                        return fresh[1]
+                    return local_data
 
                 console.print("[dim]Connected to local IDE[/]")
             elif args.local:
@@ -493,8 +496,11 @@ def main():
                     "[yellow]Connected to local IDE but no models returned.[/]"
                 )
 
-                def do_fetch(_data=local_data) -> dict:
-                    return _data
+                def do_fetch() -> dict:
+                    fresh = _try_local_ide()
+                    if fresh:
+                        return fresh[1]
+                    return local_data
             else:
                 console.print(
                     "[dim]Local IDE returned no models, falling back to cloud...[/]"
